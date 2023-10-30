@@ -74,9 +74,9 @@ def main(config):
     train_ds = CacheDataset(data["train"], transform=train_transform, num_workers=8, cache_rate=0.1)   
     val_ds = CacheDataset(data["validation"], transform=val_transform, num_workers=8, cache_rate=0.1)    
 
-    is_ddp = config["is_ddp"]
+    is_ddp = init_distributed_mode()
+    config["is_ddp"] = is_ddp
     if is_ddp:
-        init_distributed_mode()
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_ds)
         train_dataloader = DataLoader(train_ds,
@@ -117,7 +117,6 @@ def main(config):
 if __name__ == '__main__':
     config = {
         "json_path": "/homes/syli/dataset/LVSI_LNM/dataset.json",
-        "is_ddp": False,
         "resume": None,  #"./saved/model/0807_1536/checkpoint-epoch48.pth"
         "epochs": 200,
         "save_dir":"./saved",

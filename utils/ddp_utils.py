@@ -91,8 +91,7 @@ def init_distributed_mode():
         pass
     else:
         print("Not using distributed mode")
-        args.distributed = False
-        return
+        return False
 
     args.distributed = True
 
@@ -104,6 +103,7 @@ def init_distributed_mode():
     )
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
+    return True
 
 
 def reduce_across_processes(val):
