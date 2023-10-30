@@ -3,22 +3,12 @@ import torch
 from base.base_trainer import BaseTrainer
 import torch.nn.functional as F
 from tqdm import tqdm
-import torch.distributed as dist
 from torch.utils.checkpoint import checkpoint
 from skimage.color import label2rgb
 from monai.losses import DiceCELoss
 from torch.nn import BCELoss
-from utils.utils import show_3d_image
+from utils.utils import show_3d_image, judge_log
 
-
-def judge_log(is_ddp):
-    if is_ddp:
-        if dist.get_rank() == 0:
-            return True
-        else:
-            return False
-    else:
-        return True
 
 
 class SAMTrainer(BaseTrainer):
@@ -40,7 +30,7 @@ class SAMTrainer(BaseTrainer):
             checkpoint = torch.load("./work_dir/SAM/medsam_vit_b.pth")
             self.model.load_state_dict(checkpoint)
         
-        model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图
+        self.model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图
         
     
     def _train_batch_step(self, batch_data, batch_idx, epoch):
@@ -222,10 +212,12 @@ class SAMTrainer(BaseTrainer):
 class ResnetTrainer(BaseTrainer):
     def __init__(self, model, optimizer, config, 
                  data_loader, valid_data_loader=None, valid_interval=5, lr_scheduler=None):
+        # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图
         super().__init__(model, optimizer, config, data_loader, valid_data_loader, valid_interval)
         self.lr_scheduler = lr_scheduler
         self.criterion = BCELoss()
         self.writer_step = 4
+        # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图,还未支持3.11
 
     def _train_batch_step(self, batch_data, batch_idx, epoch):
         img = batch_data["image"]
@@ -251,27 +243,26 @@ class ResnetTrainer(BaseTrainer):
         :param epoch: Integer, current training epoch.
         :return: A log that contains average loss and metric in this epoch.
         """
+        # 前期设置
         epoch_loss = 0
         for metric in self.metrics:
             self.metrics[metric].reset()
         self.model.train()
+
         for batch_idx, batch_data in enumerate(tqdm(self.data_loader)):
             loss = self._train_batch_step(batch_data, batch_idx, epoch)
             epoch_loss = self._train_batch_end(loss, epoch_loss)
             if judge_log(self.config["is_ddp"]):
                 self.writer.add_scalar("lr", self.optimizer.param_groups[0]["lr"], epoch*self.len_epoch+batch_idx)
 
-        epoch_loss /= batch_idx
         
         # 看情况在哪更新
         # if self.lr_scheduler is not None:
         #     self.lr_scheduler.step()
             # current_lr = self.optimizer.learning_rate.numpy()
             # self.writer.add_scalar("Learning Rate", current_lr, step=epoch)
-            
-        log = {"loss": epoch_loss}
-        for key, value in self.metrics.items():
-            log[key] = value.aggregate()
+
+        log = self._train_epoch_end(epoch_loss, batch_idx)
 
         return log
     
@@ -282,23 +273,21 @@ class ResnetTrainer(BaseTrainer):
         :param epoch: Integer, current training epoch.
         :return: A log that contains information about validation
         """
-
+        # 前期设置
+        epoch_loss = 0 # loss置零
         for metric in self.metrics:
-            self.metrics[metric].reset()
-        self.model.eval()
-        epoch_loss = 0
+            self.metrics[metric].reset()  #metric重算
+        self.model.eval()  # 模式切换为eval
+
         for batch_idx, batch_data in enumerate(tqdm(self.valid_data_loader)):
             epoch_loss += self._valid_batch_step(batch_data, batch_idx, epoch)
             
-        # 按lighting再改改        
-        epoch_loss /= batch_idx
-        log = {"loss": epoch_loss}
-        for key, value in self.metrics.items():
-            log[key] = value.aggregate()
+        # epoch结束    
+        log = self._train_epoch_end(epoch_loss, batch_idx)
+
         return log
     
     def _valid_batch_step(self, batch_data, batch_idx, epoch):
-
         img = batch_data["image"]
         if judge_log(self.config["is_ddp"]) and batch_idx % self.writer_step == 0:
             for i, modal in enumerate(["DWI", "T1CE", "T2"]):
@@ -314,4 +303,4 @@ class ResnetTrainer(BaseTrainer):
             for pred, label, task in zip([pred1, pred2], [label1, label2], ["lvsi", "lnm"]):
                 for metric in self.config["Metrics"]:
                     self.metrics[task+"_"+metric](y_pred=pred, y=label)
-        return loss
+        return loss.item()

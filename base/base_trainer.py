@@ -12,6 +12,7 @@ from pathlib import Path
 join = os.path.join
 from torch.nn.parallel import DistributedDataParallel as DDP
 from model import metric
+from utils.utils import judge_log
 
 
 
@@ -108,7 +109,7 @@ class BaseTrainer:
             for key, value in log.items():
                 if key == "epoch":
                     continue
-                if dist.get_rank() == 0: 
+                if judge_log(self.config["is_ddp"]): 
                     metric_key = key.split("_")[-1]
                     self.writer.add_scalars(metric_key, {key: value}, epoch)
                 self.logger.info('    {:15s}: {}'.format(str(key), value))
@@ -120,7 +121,7 @@ class BaseTrainer:
                     self.mnt_best = log["val_" + self.config["standard"]]
                     best = True
             
-            if dist.get_rank() == 0:
+            if judge_log(self.config["is_ddp"]):
                 self._save_checkpoint(epoch, save_best=best)
             
             self.early_stopping(log["train_loss"])
@@ -216,4 +217,11 @@ class BaseTrainer:
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
         return epoch_loss
+    
+    def _train_epoch_end(self, epoch_loss, batch_idx):
+        epoch_loss /= batch_idx  
+        log = {"loss": epoch_loss}
+        for key, value in self.metrics.items():
+            log[key] = value.aggregate()
+        return log
         

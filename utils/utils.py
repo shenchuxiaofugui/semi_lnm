@@ -13,6 +13,7 @@ from pathlib import Path
 from skimage import morphology
 from monai.visualize import plot_2d_or_3d_image
 from skimage.color import label2rgb
+import torch.distributed as dist
 
 class EarlyStopping():
     """
@@ -203,5 +204,14 @@ def show_3d_image(img_arr:np.ndarray, mask_arr, writer, tag, step, split, show_i
     show_img = show_img.transpose(3, 0, 1, 2)
     plot_2d_or_3d_image(show_img[np.newaxis,...], step, writer=writer, tag=f"{split}_3d_image/"+tag, max_channels=3, max_frames=2)
 
+
+def judge_log(is_ddp):
+    if is_ddp:
+        if dist.get_rank() == 0:
+            return True
+        else:
+            return False
+    else:
+        return True
     
     

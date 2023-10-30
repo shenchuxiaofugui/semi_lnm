@@ -22,6 +22,8 @@ join = os.path.join
 from model.model import MultiTaskResNet, MultiTaskDenseNet
 #设置显卡间通信方式
 torch.multiprocessing.set_sharing_strategy('file_system') 
+# from torch.optim.swa_utils import AveragedModel #随机权重平均
+# 没有加入callback
 
 
 # fix random seeds for reproducibility
@@ -55,6 +57,7 @@ def main(config):
  ])
     
     
+    #记录一下用了哪些transform，概率是多少
     trans = []
     for i in train_transform.transforms:
         trans.append(i.__class__.__name__)
@@ -64,13 +67,11 @@ def main(config):
     config["trans"] = trans    
 
     # setup data_loader instances
-    
     with open(config["json_path"]) as f:
         data = json.load(f)
         
 
-    train_ds = CacheDataset(data["train"], transform=train_transform, num_workers=8, cache_rate=0.1)    
-
+    train_ds = CacheDataset(data["train"], transform=train_transform, num_workers=8, cache_rate=0.1)   
     val_ds = CacheDataset(data["validation"], transform=val_transform, num_workers=8, cache_rate=0.1)    
 
     is_ddp = config["is_ddp"]
@@ -116,7 +117,7 @@ def main(config):
 if __name__ == '__main__':
     config = {
         "json_path": "/homes/syli/dataset/LVSI_LNM/dataset.json",
-        "is_ddp": True,
+        "is_ddp": False,
         "resume": None,  #"./saved/model/0807_1536/checkpoint-epoch48.pth"
         "epochs": 200,
         "save_dir":"./saved",
