@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+# import sys
+# sys.path.append("/homes/syli/python/semi_lnm")
 from model.unet_parts import *
 from model.modules import MedNeXt, Down, UP
 from monai.networks.nets import DenseNet121
@@ -8,6 +10,7 @@ import os
 from collections import OrderedDict
 from monai.networks.layers.utils import get_act_layer
 from model.resnet import generate_model
+from model.vit_pytorch.simple_vit_3d import SimpleViT
 
 
 class MnistModel(nn.Module): #BaseModel
@@ -177,15 +180,65 @@ class MultiTaskDenseNet(nn.Module):
         output_task2 = self.fc_task2(features)
 
         return output_task1, output_task2
+    
+class MultiTaskSimpleVIT(nn.Module):
+    def __init__(self, input_channels=3):
+        super(MultiTaskSimpleVIT, self).__init__()
+        
+        # Load a pre-trained ResNet model
+        self.vit = SimpleViT(
+            image_size = 200,
+            image_patch_size = 20,
+            frames=12, frame_patch_size=3,
+            num_classes = 1,
+            dim = 1024,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            channels = input_channels
+            )
+        
+        # Remove the original fully connected layer
+        self.vit = nn.Sequential(*list(self.vit.children())[:-1])
+        # Task 1-specific layers
+        self.fc_task1 = nn.Linear(1024, 1)
+        
+        # Task 2-specific layers
+        self.fc_task2 = nn.Linear(1024, 1)
+        self.m = nn.Sigmoid()
+        
+    def forward(self, x):
+        # Forward pass through the ResNet backbone
+        # x = x.permute(0,1,4,2,3)
+        # print(x.shape)
+        x = self.vit(x)
+        x = x.view(x.size(0), -1)
+        # Task 1 branch
+        output_task1 = self.m(self.fc_task1(x))
+        
+        # Task 2 branch
+        output_task2 = self.m(self.fc_task2(x))
+        
+        return output_task1, output_task2
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = '1'
-    k, R = 3, 2
-    m = MultiTaskResNet()
+    m = MultiTaskSimpleVIT()
     #med = MedNeXt(2, k, R)
     # down = Down(32, k, R)
-    # x = torch.randn(2, 2, 100,100, 10, requires_grad=True)
+    x = torch.randn((4, 3, 12, 200,200), requires_grad=True)
+    y = torch.randn((4, 3, 200,200,12), requires_grad=True)
+    vit = SimpleViT(
+            image_size = 200,
+            image_patch_size = 20,
+            frames=12, frame_patch_size=3,
+            num_classes = 1,
+            dim = 1024,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            channels = 3
+            )
     # y = torch.randn(2, 2, 100, 100, 10, requires_grad=True)
     # stem = nn.Sequential(nn.Conv3d(2, 32, 1, 1), MedNeXt(32, 3, 2))
     # med = nn.Sequential(stem, down)
@@ -200,7 +253,9 @@ if __name__ == "__main__":
     # output2 = model(y)[3]
     # loss = torch.sum(output2)
     # loss.backward()
-    print(m)
+    #print(vit(x).shape)
+    #print(m.vit)
+    print(m.vit(x).shape)
 
     # summary(model, (4, 224, 224, 10))
 

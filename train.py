@@ -20,6 +20,7 @@ from torch.optim.lr_scheduler import CyclicLR
 import os
 join = os.path.join
 from model.model import MultiTaskResNet, MultiTaskDenseNet
+from model.vit_pytorch.simple_vit_3d import SimpleViT
 #设置显卡间通信方式
 torch.multiprocessing.set_sharing_strategy('file_system') 
 # from torch.optim.swa_utils import AveragedModel #随机权重平均
@@ -94,7 +95,18 @@ def main(config):
                             num_workers=4, pin_memory=True)
 
     # build model architecture, then print to console
-    model = MultiTaskResNet(input_channels=3)
+    # model = MultiTaskResNet(input_channels=3)
+    model = SimpleViT(
+            image_size = 200,
+            image_patch_size = 20,
+            frames=12, frame_patch_size=3,
+            num_classes = 1,
+            dim = 1024,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            channels = 3
+            )
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
     optimizer_method = getattr(torch.optim, config["optimizer"]["type"] )
@@ -127,7 +139,7 @@ if __name__ == '__main__':
             "lr": 1e-5,
             "weight_decay": 1e-4,
         }},
-        "batch_size":25,
+        "batch_size":10,
         "valid_interval":2,
         "standard": "lvsi_auc",
         "Metrics": {"Acc":{}, "ROCAUC":{"average":"macro"}},
