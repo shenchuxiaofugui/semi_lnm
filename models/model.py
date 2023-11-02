@@ -3,14 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 # import sys
 # sys.path.append("/homes/syli/python/semi_lnm")
-from model.unet_parts import *
-from model.modules import MedNeXt, Down, UP
+from models.unet_parts import *
+from models.modules import MedNeXt, Down, UP
 from monai.networks.nets import DenseNet121
 import os
 from collections import OrderedDict
 from monai.networks.layers.utils import get_act_layer
-from model.resnet import generate_model
-from model.vit_pytorch.simple_vit_3d import SimpleViT
+from models.resnet import generate_model
+from models.vit_pytorch.simple_vit_3d import SimpleViT
 
 
 class MnistModel(nn.Module): #BaseModel
@@ -199,7 +199,7 @@ class MultiTaskSimpleVIT(nn.Module):
             )
         
         # Remove the original fully connected layer
-        self.vit = nn.Sequential(*list(self.vit.children())[:-1])
+        self.vit = nn.Sequential(*list(self.vit.children())[:-2])
         # Task 1-specific layers
         self.fc_task1 = nn.Linear(1024, 1)
         
@@ -255,7 +255,8 @@ if __name__ == "__main__":
     # loss.backward()
     #print(vit(x).shape)
     #print(m.vit)
-    print(m.vit(x).shape)
+    print(vit)
+    print(m.vit)
 
     # summary(model, (4, 224, 224, 10))
 

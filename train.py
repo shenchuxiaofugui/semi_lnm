@@ -19,8 +19,8 @@ from utils.Transform import Concat
 from torch.optim.lr_scheduler import CyclicLR
 import os
 join = os.path.join
-from model.model import MultiTaskResNet, MultiTaskDenseNet
-from model.vit_pytorch.simple_vit_3d import SimpleViT
+from models.model import MultiTaskResNet, MultiTaskDenseNet
+from models.vit_pytorch.simple_vit_3d import SimpleViT
 #设置显卡间通信方式
 torch.multiprocessing.set_sharing_strategy('file_system') 
 # from torch.optim.swa_utils import AveragedModel #随机权重平均
