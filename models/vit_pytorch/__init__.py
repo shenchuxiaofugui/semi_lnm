@@ -1,5 +1,5 @@
 import sys
-sys.path.append("/homes/syli/python/semi_lnm/model")
+sys.path.append("/homes/syli/python/semi_lnm/models")
 from vit_pytorch.vit import ViT
 from vit_pytorch.simple_vit import SimpleViT
 

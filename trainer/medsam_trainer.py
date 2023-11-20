@@ -6,6 +6,7 @@ from tqdm import tqdm
 from torch.utils.checkpoint import checkpoint
 from skimage.color import label2rgb
 from monai.losses import DiceCELoss
+from models.loss import GHMC
 from torch.nn import BCELoss
 from utils.utils import show_3d_image, judge_log
 
@@ -215,7 +216,7 @@ class ResnetTrainer(BaseTrainer):
         # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图
         super().__init__(model, optimizer, config, data_loader, valid_data_loader, valid_interval)
         self.lr_scheduler = lr_scheduler
-        self.criterion = BCELoss()
+        self.criterion = GHMC()
         self.writer_step = 4
         # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图,还未支持3.11
 
@@ -230,7 +231,9 @@ class ResnetTrainer(BaseTrainer):
         label2 = batch_data["label"][1].to(torch.float).to(self.device)
         pred1, pred2 = self.model(img)
         pred1, pred2 = torch.squeeze(pred1), torch.squeeze(pred2)
-        loss = self.criterion(pred1, label1) + self.criterion(pred2, label2)
+        label_weight1 = torch.where(label1 == 1, torch.tensor(0.738), torch.tensor(0.262))
+        label_weight2 = torch.where(label2 == 1, torch.tensor(0.829), torch.tensor(0.171))
+        loss = self.criterion(pred1, label1, label_weight1) + self.criterion(pred2, label2, label_weight2)
         for pred, label, task in zip([pred1, pred2], [label1, label2], ["lvsi", "lnm"]):
             for metric in self.config["Metrics"]:
                 self.metrics[task+"_"+metric](y_pred=pred, y=label)
@@ -299,7 +302,10 @@ class ResnetTrainer(BaseTrainer):
         with torch.no_grad():
             pred1, pred2 = self.model(img)
             pred1, pred2 = torch.squeeze(pred1), torch.squeeze(pred2)
-            loss = self.criterion(pred1, label1) + self.criterion(pred2, label2)
+            label_weight1 = torch.where(label1 == 1, torch.tensor(0.738), torch.tensor(0.262))
+            label_weight2 = torch.where(label2 == 1, torch.tensor(0.829), torch.tensor(0.171))
+            loss = self.criterion(pred1, label1, label_weight1) + self.criterion(pred2, label2, label_weight2)
+            # loss = self.criterion(pred1, label1) + self.criterion(pred2, label2)
             for pred, label, task in zip([pred1, pred2], [label1, label2], ["lvsi", "lnm"]):
                 for metric in self.config["Metrics"]:
                     self.metrics[task+"_"+metric](y_pred=pred, y=label)

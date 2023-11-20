@@ -139,7 +139,7 @@ if __name__ == '__main__':
             "lr": 1e-5,
             "weight_decay": 1e-4,
         }},
-        "batch_size":20,
+        "batch_size":25,
         "valid_interval":2,
         "standard": "lvsi_auc",
         "Metrics": {"Acc":{}, "ROCAUC":{"average":"macro"}},

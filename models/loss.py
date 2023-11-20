@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 from monai.losses.dice import DiceLoss
-from registry import LOSSES
+from models.registry import LOSSES
 
 def nll_loss(output, target):
     return F.nll_loss(output, target)
@@ -213,9 +213,6 @@ class GHMC(nn.Module):
         self.edges[-1] += 1e-6
         if momentum > 0:
             self.acc_sum = torch.zeros(bins).cuda()
-        self.use_sigmoid = use_sigmoid
-        if not self.use_sigmoid:
-            raise NotImplementedError
         self.loss_weight = loss_weight
 
     def forward(self, pred, target, label_weight, *args, **kwargs):
@@ -241,7 +238,7 @@ class GHMC(nn.Module):
         weights = torch.zeros_like(pred)
 
         # gradient length
-        g = torch.abs(pred.sigmoid().detach() - target)
+        g = torch.abs(pred.detach() - target)
 
         valid = label_weight > 0
         tot = max(valid.float().sum().item(), 1.0)
@@ -260,7 +257,7 @@ class GHMC(nn.Module):
         if n > 0:
             weights = weights / n
 
-        loss = F.binary_cross_entropy_with_logits(
+        loss = F.binary_cross_entropy(
             pred, target, weights, reduction='sum') / tot
         return loss * self.loss_weight
 
@@ -344,5 +341,8 @@ class GHMR(nn.Module):
     
 if __name__ == "__main__":
     loss = GHMC()
-    pred = torch.tensor([[0.1], [0.2], [0.8], [0.9]])
-    print(pred.shape)
+    pred = torch.tensor([[0.1], [0.2], [0.8], [0.9]]).squeeze()
+    target = torch.tensor([[0], [0], [0], [1]]).squeeze()
+    weights = torch.tensor([[0.25], [0.25], [0.25], [.075]]).squeeze()
+    print(pred.shape, target.shape, weights.shape)
+    print(loss(pred.cuda(), target.cuda(), weights.cuda()))

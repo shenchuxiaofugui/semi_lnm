@@ -11,7 +11,7 @@ import torch.distributed as dist
 from pathlib import Path
 join = os.path.join
 from torch.nn.parallel import DistributedDataParallel as DDP
-from model import metric
+from models import metric
 from utils.utils import judge_log
 
 
@@ -22,7 +22,7 @@ class BaseTrainer:
     没多大可能动的设置放在此处
     """
     def __init__(self, model, optimizer, config, data_loader, 
-                 valid_data_loader=None, valid_interval=5, early_stopping=10):
+                 valid_data_loader=None, valid_interval=5, early_stopping=20):
         self.data_loader = data_loader # 训练数据
         self.valid_data_loader = valid_data_loader  # 验证数据
         self.do_validation = self.valid_data_loader is not None  # 是否做验证
