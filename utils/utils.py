@@ -141,9 +141,9 @@ def get_slice(case, i, size, mask_crop, axis):
     
     
 def timer(func):
-    def func_in():
+    def func_in(*args, **kwargs):
         start_time = time.time()
-        func()
+        func(*args, **kwargs)
         end_time = time.time()
         spend_time = (end_time - start_time)/60
         print("Spend_time:{} min".format(spend_time))
@@ -213,5 +213,13 @@ def judge_log(is_ddp):
             return False
     else:
         return True
+    
+class LRCallback:
+    def __init__(self, writer):
+        self.writer = writer
+
+    def __call__(self, epoch, scheduler):
+        current_lr = scheduler.get_last_lr()[0]
+        self.writer.add_scalar('learning_rate', current_lr, epoch)
     
     

@@ -2,42 +2,49 @@ import torch
 from abc import abstractmethod
 from numpy import inf
 from tensorboardX import SummaryWriter
-from torch.utils.checkpoint import checkpoint
 from utils.utils import EarlyStopping
 import logging
 import time
 import os
-import torch.distributed as dist
 from pathlib import Path
 join = os.path.join
 from torch.nn.parallel import DistributedDataParallel as DDP
-from models import metric
+from models import metric, model
 from utils.utils import judge_log
+from models.lr_scheduler import PolyLRScheduler
+from tqdm import tqdm
+from models import loss
 
 
 
-class BaseTrainer:
+class BaseTrainer(object):
     """
     Base class for all trainers
     没多大可能动的设置放在此处
     """
-    def __init__(self, model, optimizer, config, data_loader, 
-                 valid_data_loader=None, valid_interval=5, early_stopping=20):
+    def __init__(self, config, data_loader, valid_data_loader=None,):
         self.data_loader = data_loader # 训练数据
         self.valid_data_loader = valid_data_loader  # 验证数据
         self.do_validation = self.valid_data_loader is not None  # 是否做验证
-        self.valid_interval = valid_interval # 每几个epoch做一次验证
+        self.valid_interval = config["valid_interval"] # 每几个epoch做一次验证
         self.config = config  # 一些超参的字典 （之后可以考虑改成arg
         self.device = "cuda"
-        self.model = model.to(self.device)
-        self.optimizer = optimizer 
         self.scaler = torch.cuda.amp.GradScaler()  #采用amp
         self.start_epoch = 0 # 开始的epoch，有checkpoint会更新
         self.mnt_best = 0 # 最优的验证集metric
         self.epochs = config['epochs'] # 最大训练轮次
         self.len_epoch = len(self.data_loader) # 一个epoch有多少个batch
-        self.early_stopping = EarlyStopping(early_stopping) # 设置早停
+        self.early_stopping = EarlyStopping(config["early_stopping"]) # 设置早停
+        # build model architecture, then print to console
+        network = getattr(model, config['network']['arch'])(**config["network"]["args"])
+        self.model = network.to(self.device)
 
+        # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
+        self.optimizer = getattr(torch.optim, config["optimizer"]["type"])(self.model.parameters(), **config["optimizer"]["args"])
+        self.lr_scheduler = PolyLRScheduler(self.optimizer, config["optimizer"]["args"]["lr"], self.epochs)
+
+        # loss 
+        self.criterion = getattr(loss, config["criterion"])()
         # configuration to monitor model performance and save best
         now_time = self._get_time()
         self.model_path = join(config["save_dir"], "model", now_time)
@@ -69,17 +76,26 @@ class BaseTrainer:
         self.writer = SummaryWriter(log_dir=self.logger_path)
         
         # DDP加载
-        if config["is_ddp"]:
+        self.is_ddp = config["is_ddp"]
+        if self.is_ddp:
+            self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = DDP(self.model, device_ids=[self.device])
 
-    @abstractmethod
     def _train_epoch(self, epoch):
         """
         Training logic for an epoch
 
         :param epoch: Current epoch number
         """
-        raise NotImplementedError
+        epoch_loss = self._epoch_start(epoch, "train")
+        # 每一batch要做的事
+        for batch_idx, batch_data in enumerate(tqdm(self.data_loader)):
+            loss = self._train_batch_step(batch_data, batch_idx, epoch)
+            epoch_loss += self._train_batch_end(loss)
+
+        log = self._train_epoch_end(epoch_loss, batch_idx)
+
+        return log
     
     def _valid_epoch(self, epoch):
         """
@@ -87,46 +103,76 @@ class BaseTrainer:
 
         :param epoch: Current epoch number
         """
+        epoch_loss = self._epoch_start(epoch, "valid")
+
+        for batch_idx, batch_data in enumerate(tqdm(self.valid_data_loader)):
+            epoch_loss += self._valid_batch_step(batch_data, batch_idx, epoch)
+            
+        # epoch结束    
+        log = self._train_epoch_end(epoch_loss, batch_idx)
+
+        return log
+
+    @abstractmethod
+    def _train_batch_step(self, batch_data, batch_idx, epoch):
+    # Training logic for an epoch
+        raise NotImplementedError
+    
+    def _valid_batch_step(self, batch_data, batch_idx, epoch):
+        raise NotImplementedError
+
+    @abstractmethod
+    def _load_and_visualization_input(self):
+        raise NotImplementedError
+    
+    @abstractmethod
+    def _update_metrics(self):
         raise NotImplementedError
 
     def train(self):
         """
         Full training logic
         """
+        torch.cuda.empty_cache() # 训练刚开始清一下缓存
         for epoch in range(self.start_epoch, self.epochs + 1):
-            result = self._train_epoch(epoch)
-
-            # save logged informations into log dict
+            # 每一epoch要实现的事
             log = {'epoch': epoch}
+            # save train informations into log dict
+            result = self._train_epoch(epoch)
             log.update(**{'train_'+k : v for k, v in result.items()})
-            
+
+            # save validtion informations into log dict
             if self.do_validation and (epoch + 1) % self.valid_interval == 0:
                 val_log = self._valid_epoch(epoch)
                 log.update(**{'val_'+k : v for k, v in val_log.items()})
-                   
-
-            # print logged informations to the screen
-            for key, value in log.items():
-                if key == "epoch":
-                    continue
-                if judge_log(self.config["is_ddp"]): 
-                    metric_key = key.split("_")[-1]
-                    self.writer.add_scalars(metric_key, {key: value}, epoch)
-                self.logger.info('    {:15s}: {}'.format(str(key), value))
-
-            # evaluate model performance according to configured metric, save best checkpoint as model_best
-            best = False
-            if "val_" + self.config["standard"] in log.keys():
-                if self.mnt_best < log["val_" + self.config["standard"]]:
-                    self.mnt_best = log["val_" + self.config["standard"]]
-                    best = True
             
-            if judge_log(self.config["is_ddp"]):
-                self._save_checkpoint(epoch, save_best=best)
-            
-            self.early_stopping(log["train_loss"])
+            self._on_epoch_end(log, epoch)
+            # early stop
             if self.early_stopping.early_stop:
                 break
+
+    def _on_epoch_end(self, log, epoch):
+        # print logged informations to the screen
+        for key, value in log.items():
+            if key == "epoch":
+                continue
+            if judge_log(self.is_ddp): 
+                metric_key = key.split("_")[-1]
+                self.writer.add_scalars(metric_key, {key: value}, epoch)
+            self.logger.info('    {:15s}: {}'.format(str(key), value))
+
+        # evaluate model performance according to configured metric, save best checkpoint as model_best
+        best = False
+        if "val_" + self.config["standard"] in log.keys():
+            if self.mnt_best < log["val_" + self.config["standard"]]:
+                self.mnt_best = log["val_" + self.config["standard"]]
+                best = True
+        
+        if judge_log(self.is_ddp):
+            self._save_checkpoint(epoch, save_best=best)
+        
+        self.early_stopping(log["train_loss"])
+        
 
     def _save_checkpoint(self, epoch, save_best=False):
         """
@@ -136,9 +182,7 @@ class BaseTrainer:
         :param log: logging information of the epoch
         :param save_best: if True, rename the saved checkpoint to 'model_best.pth'
         """
-        arch = type(self.model).__name__
         state = {
-            'arch': arch,
             'epoch': epoch,
             'state_dict': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
@@ -169,7 +213,7 @@ class BaseTrainer:
         self.mnt_best = checkpoint['monitor_best']
 
         # load architecture params from checkpoint.
-        if checkpoint['config']['arch'] != self.config['arch']:
+        if checkpoint['config']['network']['arch'] != self.config['network']['arch']:
             print("Warning: Architecture configuration given in config file is different from that of "
                                 "checkpoint. This may yield an exception while state_dict is being loaded.")
         my_dic_keys = list(checkpoint['state_dict'].keys())
@@ -188,14 +232,15 @@ class BaseTrainer:
         print("Checkpoint loaded. Resume training from epoch {}".format(self.start_epoch))
         self.model_path = os.path.dirname(resume_path)
         self.logger_path = join(self.model_path.replace("model", "log"))
-        
-    def _get_time(self):
+
+    @staticmethod    
+    def _get_time():
         t = time.localtime()
         now = time.strftime("%m%d_", t) + str(t.tm_hour+8)+str(t.tm_min)
         return now
-    
-    
-    def _set_logger(self, logger_path):
+        
+    @staticmethod     
+    def _set_logger(logger_path):
         logger = logging.getLogger(__name__)
         logger.setLevel(level = logging.INFO)
         handler = logging.FileHandler(join(logger_path, "log.txt"))
@@ -208,15 +253,14 @@ class BaseTrainer:
         logger.addHandler(console)
         return logger
     
-    def _train_batch_end(self, batch_loss, epoch_loss):
+    def _train_batch_end(self, batch_loss):
         self.optimizer.zero_grad()
         self.scaler.scale(batch_loss).backward()
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        epoch_loss += batch_loss.item()
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
-        return epoch_loss
+        # if self.lr_scheduler is not None:
+        #     self.lr_scheduler.step()
+        return batch_loss.item()
     
     def _train_epoch_end(self, epoch_loss, batch_idx):
         epoch_loss /= batch_idx  
@@ -224,4 +268,14 @@ class BaseTrainer:
         for key, value in self.metrics.items():
             log[key] = value.aggregate()
         return log
-        
+    
+    def _epoch_start(self, epoch, mode):
+        for metric in self.metrics:
+            self.metrics[metric].reset()
+        if mode == "train":
+            self.model.train()
+            self.lr_scheduler.step()
+            self.writer.add_scalar("lr", self.optimizer.param_groups[0]["lr"], epoch) #可以用callback实现，但是没有必要
+        elif mode == "valid":
+            self.model.eval()
+        return 0

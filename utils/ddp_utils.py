@@ -4,22 +4,6 @@ import torch.distributed as dist
 import argparse
 
 
-def init_ddp():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", default=-1)
-    FLAGS = parser.parse_args()
-    local_rank = FLAGS.local_rank
-
-    # 新增3：DDP backend初始化
-    #   a.根据local_rank来设定当前使用哪块GPU
-    torch.cuda.set_device(local_rank)
-    #   b.初始化DDP，使用默认backend(nccl)就行。如果是CPU模型运行，需要选择其他后端。
-    dist.init_process_group(backend='nccl')
-
-    # 新增4：定义并把模型放置到单独的GPU上，需要在调用`model=DDP(model)`前做哦。
-    #       如果要加载模型，也必须在这里做哦。
-    return local_rank
-
 
 def setup_for_distributed(is_master):
     """
@@ -44,6 +28,13 @@ def setup_for_distributed(is_master):
             logger_info(*args, **kwargs)
     Logger.info = info
     
+    from tensorboard import SummaryWriter
+    writer_scale = SummaryWriter.add_scalar
+    def add_scalar(*args, **kwargs):
+        force = kwargs.pop("force", False)
+        if is_master or force:
+            writer_scale(*args, **kwargs)
+    SummaryWriter.add_scalar = add_scalar
     
     
 

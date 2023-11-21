@@ -1,5 +1,6 @@
 import torch.nn.functional as F
 import torch.nn as nn
+from torch.nn import BCELoss
 import torch
 import numpy as np
 from monai.losses.dice import DiceLoss
