@@ -1,4 +1,5 @@
 import torch
+import random
 import numpy as np
 from monai.data import DataLoader, CacheDataset
 from monai.transforms import (
@@ -18,6 +19,8 @@ from utils.ddp_utils import init_distributed_mode
 from utils.Transform import Concat
 import os
 join = os.path.join
+import argparse
+import torch.distributed as dist
 #设置显卡间通信方式
 torch.multiprocessing.set_sharing_strategy('file_system') 
 # from torch.optim.swa_utils import AveragedModel #随机权重平均
@@ -25,17 +28,22 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 # fix random seeds for reproducibility
 SEED = 2023
-torch.manual_seed(SEED)
-torch.backends.cudnn.deterministic = True  #在gpu训练时固定随机源
+def init_seeds(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+torch.backends.cudnn.deterministic = False  #在gpu训练时固定随机源
 torch.backends.cudnn.benchmark = True   #搜索卷积方式，启动算法前期较慢，后期会快
 # torch.autograd.detect_anomaly() # debug的时候启动，用于检查异常
-np.random.seed(SEED)
 
-def main(config):
+
+
+def main(plans_args):
     '''
     设计思路抄自pytorch lighting 和 nnunetv2
     callback 只用在了early stopping, 目前没有其他使用需求
-    装饰器
+    装饰器只用了静态装饰器和timer
+    没有实现梯度累加功能,如果实现记得在DDP模式下取消前几次的梯度同步
     '''
     
     #%% set up transform
@@ -64,43 +72,45 @@ def main(config):
         trans.append(i.__class__.__name__)
         if hasattr(i, 'prob'):
             trans.append(i.prob)
-        
-    config["trans"] = trans    
+
+    plans_args.config["trans"] = trans    
 
     # setup data_loader instances
-    with open(config["json_path"]) as f:
+    with open(plans_args.json_path) as f:
         data = json.load(f)
         
 
-    train_ds = CacheDataset(data["train"], transform=train_transform, num_workers=8, cache_rate=0.1)   
-    val_ds = CacheDataset(data["validation"], transform=val_transform, num_workers=8, cache_rate=0.1)    
+    train_ds = CacheDataset(data["train"], transform=train_transform, num_workers=8, cache_rate=0)   
+    val_ds = CacheDataset(data["validation"], transform=val_transform, num_workers=8, cache_rate=0)    
 
-    is_ddp = init_distributed_mode()
-    config["is_ddp"] = is_ddp
-    if is_ddp:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_ds)
-        train_dataloader = DataLoader(train_ds,
-                        batch_size=config["batch_size"], num_workers=4,
-                        sampler=train_sampler, pin_memory=True)
-        val_dataloader = DataLoader(val_ds,
-                                    batch_size=config["batch_size"], num_workers=4,
-                                    sampler=val_sampler, pin_memory=True)
+    plans_args = init_distributed_mode(plans_args)
+    
+    # 随机数设置一下
+    if not plans_args.ddp:
+        init_seeds(seed=SEED)
     else:
-        train_dataloader = DataLoader(train_ds,
-                        batch_size=config["batch_size"], shuffle=True,
-                        num_workers=4, pin_memory=True)
-        val_dataloader = DataLoader(val_ds, 
-                            batch_size=config["batch_size"], shuffle=True,
-                            num_workers=4, pin_memory=True)
+        init_seeds(seed=SEED+plans_args.rank)
+
+    # dataloader总得设置一下吧
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds) if plans_args.ddp else None
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_ds) if plans_args.ddp else None
+    train_dataloader = DataLoader(train_ds, shuffle=(train_sampler is None),
+                    batch_size=plans_args.batch_size, num_workers=8,
+                    sampler=train_sampler, pin_memory=True)
+    val_dataloader = DataLoader(val_ds, shuffle=(val_sampler is None),
+                                batch_size=plans_args.batch_size, num_workers=8,
+                                sampler=val_sampler, pin_memory=True)
+        
 
     trainer = ResnetTrainer(
-                      config=config,
+                      plans=plans_args,
                       data_loader=train_dataloader,
                       valid_data_loader=val_dataloader,
                     )
 
     trainer.train() # 也可以在这里传入model和dataloader
+    dist.destroy_process_group()
+    
 
 
 if __name__ == '__main__':
@@ -119,10 +129,13 @@ if __name__ == '__main__':
         }},
         "batch_size":25,
         "valid_interval":2,
-        "standard": "lvsi_Auc",
+        "standard": "lvsi_ROCAUC",
         "Metrics": {"Acc":{}, "ROCAUC":{"average":"macro"}},
         "tasks": {"lvsi", "lnm"},
         "early_stopping": 20,
+        "criterion": "GHMC",
     }
-    # ddp module的优化meizuo
-    main(config)
+
+    plans_args = argparse.Namespace(**config)
+    plans_args.config = config
+    main(plans_args)

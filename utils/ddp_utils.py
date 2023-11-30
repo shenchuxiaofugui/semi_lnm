@@ -1,7 +1,6 @@
 import os
 import torch
 import torch.distributed as dist
-import argparse
 
 
 
@@ -28,7 +27,7 @@ def setup_for_distributed(is_master):
             logger_info(*args, **kwargs)
     Logger.info = info
     
-    from tensorboard import SummaryWriter
+    from tensorboardX import SummaryWriter
     writer_scale = SummaryWriter.add_scalar
     def add_scalar(*args, **kwargs):
         force = kwargs.pop("force", False)
@@ -68,8 +67,8 @@ def save_on_master(*args, **kwargs):
         torch.save(*args, **kwargs)
 
 
-def init_distributed_mode():
-    args = argparse.ArgumentParser()
+def init_distributed_mode(args):
+    args.ddp = True
     args.dist_url = "env://"
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         args.rank = int(os.environ["RANK"])
@@ -82,19 +81,18 @@ def init_distributed_mode():
         pass
     else:
         print("Not using distributed mode")
-        return False
-
-    args.distributed = True
+        args.ddp = False
+        return args
 
     torch.cuda.set_device(args.gpu)
     args.dist_backend = "nccl"
     print(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
     torch.distributed.init_process_group(
-        backend=args.dist_backend,  world_size=args.world_size, rank=args.rank
+        backend=args.dist_backend, init_method=args.dist_url,  world_size=args.world_size, rank=args.rank
     )
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
-    return True
+    return args
 
 
 def reduce_across_processes(val):

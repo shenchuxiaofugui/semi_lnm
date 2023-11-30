@@ -221,5 +221,33 @@ class LRCallback:
     def __call__(self, epoch, scheduler):
         current_lr = scheduler.get_last_lr()[0]
         self.writer.add_scalar('learning_rate', current_lr, epoch)
-    
+
+
+if __name__ == "__main__":
+    config = {
+        "json_path": "/homes/syli/dataset/LVSI_LNM/dataset.json",
+        "resume": None,  #"./saved/model/0807_1536/checkpoint-epoch48.pth"
+        "epochs": 200,
+        "save_dir":"./saved",
+        'network': {"arch": "MultiTaskResNet",
+                    "args": None},
+        "optimizer": {
+        "type": "Adam",
+        "args":{
+            "lr": 1e-5,
+            "weight_decay": 1e-4,
+        }},
+        "batch_size":25,
+        "valid_interval":2,
+        "standard": "lvsi_Auc",
+        "Metrics": {"Acc":{}, "ROCAUC":{"average":"macro"}},
+        "tasks": {"lvsi", "lnm"},
+        "early_stopping": 20,
+        "criterion": "GHMC",
+    }
+    import argparse
+    plans_args = argparse.Namespace(**config)
+    plans_args.config = config
+    print(plans_args.config["network"]["arch"])
+
     

@@ -97,8 +97,7 @@ class SAMTrainer(BaseTrainer):
                         epoch * (self.len_epoch // self.writer_step)+(batch_idx // self.writer_step), 
                         dataformats="HWC", thickness=1)    
         return loss
-  
-    
+      
     def _train_epoch(self, epoch):
         """
         Training logic for an epoch
@@ -208,9 +207,9 @@ class SAMTrainer(BaseTrainer):
 
 
 class ResnetTrainer(BaseTrainer):
-    def __init__(self, config, data_loader, valid_data_loader=None, valid_interval=5):
+    def __init__(self, plans, data_loader, valid_data_loader=None):
         # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图
-        super().__init__(config, data_loader, valid_data_loader, valid_interval)
+        super().__init__(plans, data_loader, valid_data_loader)
         self.writer_step = 5
         # model = torch.compile(model, mode="default") #pytorch2.0全新特性，类似静态图,还未支持3.11
 
@@ -234,11 +233,10 @@ class ResnetTrainer(BaseTrainer):
         loss = self.criterion(pred1, label1, label_weight1) + self.criterion(pred2, label2, label_weight2)
         # updata metrics
         for pred, label, task in zip([pred1, pred2], [label1, label2], ["lvsi", "lnm"]):
-            for metric in self.config["Metrics"]:
+            for metric in self.plans.Metrics:
                 self.metrics[task+"_"+metric](y_pred=pred, y=label)
         return loss
-    
-    
+        
     def _valid_batch_step(self, batch_data, batch_idx, epoch):
         img, label1, label2 = self._load_and_visualize_input(batch_data, batch_idx, epoch, "valid")
         with torch.no_grad():
@@ -251,6 +249,6 @@ class ResnetTrainer(BaseTrainer):
             # loss = self.criterion(pred1, label1) + self.criterion(pred2, label2)
             # updata metrics
             for pred, label, task in zip([pred1, pred2], [label1, label2], ["lvsi", "lnm"]):
-                for metric in self.config["Metrics"]:
+                for metric in self.plans.Metrics:
                     self.metrics[task+"_"+metric](y_pred=pred, y=label)
         return loss.item()
